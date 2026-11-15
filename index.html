@@ -1113,8 +1113,39 @@ function drawPause(){
 const LB_KEY='vdl_board', NAME_KEY='vdl_name';
 let localBoard=[], lastName='';
 try{const r=JSON.parse(localStorage.getItem(LB_KEY)||'[]');if(Array.isArray(r))localBoard=r.filter(e=>e&&typeof e.n==='string'&&isFinite(e.s)).slice(0,10);lastName=localStorage.getItem(NAME_KEY)||'';}catch(e){}
-const LB={db:null,uid:null,can:null,rows:null,state:'local',mine:0};
+/* Ranking online fora do claude.ai: cole aqui a URL /exec do Google Apps Script. Vazio = usa o banco do artefato ou só o aparelho. */
+const RANK_URL='https://script.google.com/macros/s/AKfycbwXY6gvJncRIiYlsgszN8psqeo8umm5JoTmxw02-0ntXYEYvadANJ5KDtruppyebdwn/exec';
+const LB={db:null,uid:null,can:null,rows:null,state:'local',mine:0,web:false};
 function cleanName(v){return String(v||'').replace(/[^\p{L}\p{N} ._\-]/gu,'').replace(/\s+/g,' ').trim().slice(0,12).toUpperCase();}
+function uidWeb(){
+  let u='';try{u=localStorage.getItem('vdl_uid')||'';}catch(e){}
+  if(!/^[a-z0-9]{12,32}$/.test(u)){
+    try{u=Array.from(crypto.getRandomValues(new Uint8Array(14)),b=>(b%36).toString(36)).join('');}
+    catch(e){u='';while(u.length<14)u+=Math.floor(Math.random()*36).toString(36);}
+    try{localStorage.setItem('vdl_uid',u);}catch(e){}
+  }
+  return u;
+}
+function webCall(q){
+  const ctl=typeof AbortController==='function'?new AbortController():null, tm=setTimeout(()=>{if(ctl)ctl.abort();},12000);
+  return fetch(RANK_URL+'?'+q+'&id='+LB.uid+'&_='+Date.now(),{signal:ctl?ctl.signal:undefined}).then(r=>r.json()).then(j=>{
+    clearTimeout(tm);
+    if(!j||!j.ok||!Array.isArray(j.rows))throw new Error('resp');
+    LB.rows=j.rows.map((v,i)=>({id:v.me?LB.uid:'o'+i,n:cleanName(v.n)||'ANÔNIMO',s:Math.max(0,Math.floor(Number(v.s)||0))})).filter(r=>isFinite(r.s));
+    LB.state='live';const me=LB.rows.find(r=>r.id===LB.uid);if(me)LB.mine=me.s;
+  }).catch(e=>{clearTimeout(tm);if(!LB.rows)LB.state='local';throw e;});
+}
+let lastRefresh=0;
+function refreshBoard(){
+  if(!LB.web)return;const n=Date.now();if(n-lastRefresh<8000)return;lastRefresh=n;
+  webCall('a=top').catch(()=>{});
+}
+function initWeb(){
+  LB.web=true;LB.uid=uidWeb();LB.can=true;LB.state='loading';
+  refreshBoard();
+  setInterval(()=>{if(!document.hidden)refreshBoard();},60000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshBoard();});
+}
 async function initBoard(){
   try{
     const c=window.claude;if(!c||!c.use)return;
@@ -1141,6 +1172,7 @@ async function submitScore(raw,score){
   if(ex){if(score>ex.s)ex.s=score;}else localBoard.push({n:name,s:score});
   localBoard.sort((a,b)=>b.s-a.s);localBoard=localBoard.slice(0,10);
   try{localStorage.setItem(LB_KEY,JSON.stringify(localBoard));}catch(e){}
+  if(LB.web){try{lastRefresh=Date.now();await webCall('a=save&n='+encodeURIComponent(name)+'&s='+Math.floor(score));}catch(e){}}
   if(LB.db&&LB.uid&&LB.can!==false){
     try{
       const ref=LB.db.doc('ranking/'+LB.uid), cur=await ref.get(), d=cur.exists?cur.data():null;
@@ -1153,7 +1185,7 @@ async function submitScore(raw,score){
 const uiEl=document.getElementById('ui'), nmEl=document.getElementById('nm'), okEl=document.getElementById('ok'), skEl=document.getElementById('skip'), msgEl=document.getElementById('uiMsg');
 function showAsk(){
   G.askName=true;document.getElementById('uiScore').textContent=G.score+' PONTOS';nmEl.value=lastName;
-  msgEl.textContent=!LB.db?'Ranking geral indisponível aqui: o nome fica só neste aparelho.':(LB.can===false?'Seu acesso é só de leitura: o nome fica só neste aparelho.':'');
+  msgEl.textContent=!LB.db&&!LB.web?'Ranking geral indisponível aqui: o nome fica só neste aparelho.':(LB.can===false?'Seu acesso é só de leitura: o nome fica só neste aparelho.':'');
   uiEl.style.display='flex';
 }
 function hideAsk(){G.askName=false;try{uiEl.style.display='none';nmEl.blur();}catch(e){}}
@@ -1241,7 +1273,7 @@ function onDown(e){
   if(G.rank){if(G.rankT>0.2){G.rank=false;sfx.ui();}return;}
   if(G.paused){G.paused=false;last=0;if(G.state==='play')startMusic();return;}
   if(G.state==='ready'){const ch=pilotChips().find(r=>inRect(x,y,r,3));if(ch){pilotIdx=ch.i;savePilot();sfx.ui();return;}}
-  if(G.rkBtn&&inRect(x,y,G.rkBtn,6)&&(G.state==='ready'||(G.state==='over'&&G.overT>0.5))){G.rank=true;G.rankT=0;sfx.ui();return;}
+  if(G.rkBtn&&inRect(x,y,G.rkBtn,6)&&(G.state==='ready'||(G.state==='over'&&G.overT>0.5))){G.rank=true;G.rankT=0;sfx.ui();refreshBoard();return;}
   switch(G.state){
     case 'ready':startGame();break;
     case 'play':flap();break;
@@ -1287,7 +1319,7 @@ function setupIcon(){
 
 /* ===== início ===== */
 resize();initClouds();resetGame();setupIcon();
-(function waitClaude(n){if(window.claude&&window.claude.use)initBoard();else if(n<20)setTimeout(()=>waitClaude(n+1),250);})(0);
+if(RANK_URL)initWeb();else(function waitClaude(n){if(window.claude&&window.claude.use)initBoard();else if(n<20)setTimeout(()=>waitClaude(n+1),250);})(0);
 window.__G=G;window.__sfx=sfx;
 requestAnimationFrame(frame);
 })();
