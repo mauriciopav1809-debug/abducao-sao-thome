@@ -211,7 +211,7 @@ function stopMusic(){
 /* ===== estado do jogo ===== */
 const G={state:'ready',paused:false,t:0,score:0,newBest:false,camX:0,pipes:[],lastGy:320,
   ship:{x:90,y:320,vy:0,rot:0,flap:0},lms:[],nextLm:1,parts:[],clouds:[],shake:0,flash:0,
-  scorePop:0,banner:null,overT:0,deadT:0,landed:false,btn:null,tail:0,tod:0.10,pipeIdx:0,rank:false,rankT:0,rkScroll:0,rkMax:0,rdrag:null,askName:false,asked:false,rkBtn:null};
+  scorePop:0,banner:null,overT:0,deadT:0,landed:false,btn:null,tail:0,tod:0.10,pipeIdx:0,rank:false,rankT:0,rkScroll:0,rkMax:0,rdrag:null,tok:'',askName:false,asked:false,rkBtn:null};
 
 /* ===== helpers de desenho ===== */
 function slabPath(x,y,w,h,c){c=c||2;ctx.beginPath();ctx.moveTo(x+c,y);ctx.lineTo(x+w-c,y);ctx.lineTo(x+w,y+c);ctx.lineTo(x+w,y+h-c);ctx.lineTo(x+w-c,y+h);ctx.lineTo(x+c,y+h);ctx.lineTo(x,y+h-c);ctx.lineTo(x,y+c);ctx.closePath();}
@@ -949,6 +949,7 @@ function resetGame(){
 function startGame(){
   G.state='play';G.score=0;G.pipeIdx=0;G.pipes=[];G.lastGy=300+(rnd()*80-40);spawnPipe(W+60);G.banner=null;G.egg=null;
   startMusic();flap();
+  getToken(false);
 }
 function flap(){const s=G.ship;s.vy=-FLAP;s.flap=1;flapFx();sfx.flap();}
 function die(kind){
@@ -1135,6 +1136,17 @@ function webCall(q){
     LB.state='live';const me=LB.rows.find(r=>r.id===LB.uid);if(me)LB.mine=me.s;
   }).catch(e=>{clearTimeout(tm);if(!LB.rows)LB.state='local';throw e;});
 }
+let tokGame=0;
+/* carimbo de início de partida: o servidor assina a hora e depois confere se o tempo jogado fecha com a pontuação */
+function getToken(retry){
+  if(!LB.web)return;
+  if(!retry){tokGame++;G.tok='';}
+  const g=tokGame;
+  fetch(RANK_URL+'?a=start&id='+LB.uid+'&_='+Date.now()).then(r=>r.json()).then(j=>{
+    if(!j||!j.ok||!j.k)throw new Error('tok');
+    if(g===tokGame)G.tok=j.k;
+  }).catch(()=>{if(!retry)setTimeout(()=>{if(g===tokGame&&!G.tok)getToken(true);},2000);});
+}
 let lastRefresh=0;
 function refreshBoard(){
   if(!LB.web)return;const n=Date.now();if(n-lastRefresh<15000&&LB.rows)return;lastRefresh=n;
@@ -1171,7 +1183,7 @@ async function submitScore(raw,score){
   if(ex){if(score>ex.s)ex.s=score;}else localBoard.push({n:name,s:score});
   localBoard.sort((a,b)=>b.s-a.s);localBoard=localBoard.slice(0,300);
   try{localStorage.setItem(LB_KEY,JSON.stringify(localBoard));}catch(e){}
-  if(LB.web){try{lastRefresh=Date.now();await webCall('a=save&n='+encodeURIComponent(name)+'&s='+Math.floor(score));}catch(e){}}
+  if(LB.web){try{lastRefresh=Date.now();await webCall('a=save&n='+encodeURIComponent(name)+'&s='+Math.floor(score)+(G.tok?'&k='+encodeURIComponent(G.tok):''));}catch(e){}}
   if(LB.db&&LB.uid&&LB.can!==false){
     try{
       const ref=LB.db.doc('ranking/'+LB.uid), cur=await ref.get(), d=cur.exists?cur.data():null;
@@ -1339,7 +1351,7 @@ function setupIcon(){
 /* ===== início ===== */
 resize();initClouds();resetGame();setupIcon();
 if(RANK_URL)initWeb();else(function waitClaude(n){if(window.claude&&window.claude.use)initBoard();else if(n<20)setTimeout(()=>waitClaude(n+1),250);})(0);
-window.__G=G;window.__sfx=sfx;
+
 requestAnimationFrame(frame);
 })();
 </script>
