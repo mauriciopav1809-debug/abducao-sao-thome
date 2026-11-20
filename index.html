@@ -211,7 +211,7 @@ function stopMusic(){
 /* ===== estado do jogo ===== */
 const G={state:'ready',paused:false,t:0,score:0,newBest:false,camX:0,pipes:[],lastGy:320,
   ship:{x:90,y:320,vy:0,rot:0,flap:0},lms:[],nextLm:1,parts:[],clouds:[],shake:0,flash:0,
-  scorePop:0,banner:null,overT:0,deadT:0,landed:false,btn:null,tail:0,tod:0.10,pipeIdx:0,rank:false,rankT:0,askName:false,asked:false,rkBtn:null};
+  scorePop:0,banner:null,overT:0,deadT:0,landed:false,btn:null,tail:0,tod:0.10,pipeIdx:0,rank:false,rankT:0,rkScroll:0,rkMax:0,rdrag:null,askName:false,asked:false,rkBtn:null};
 
 /* ===== helpers de desenho ===== */
 function slabPath(x,y,w,h,c){c=c||2;ctx.beginPath();ctx.moveTo(x+c,y);ctx.lineTo(x+w-c,y);ctx.lineTo(x+w,y+c);ctx.lineTo(x+w,y+h-c);ctx.lineTo(x+w-c,y+h);ctx.lineTo(x+c,y+h);ctx.lineTo(x,y+h-c);ctx.lineTo(x,y+c);ctx.closePath();}
@@ -1112,7 +1112,7 @@ function drawPause(){
 /* ===== ranking: geral (banco do artefato) + reserva neste aparelho ===== */
 const LB_KEY='vdl_board', NAME_KEY='vdl_name';
 let localBoard=[], lastName='';
-try{const r=JSON.parse(localStorage.getItem(LB_KEY)||'[]');if(Array.isArray(r))localBoard=r.filter(e=>e&&typeof e.n==='string'&&isFinite(e.s)).slice(0,10);lastName=localStorage.getItem(NAME_KEY)||'';}catch(e){}
+try{const r=JSON.parse(localStorage.getItem(LB_KEY)||'[]');if(Array.isArray(r))localBoard=r.filter(e=>e&&typeof e.n==='string'&&isFinite(e.s)).slice(0,300);lastName=localStorage.getItem(NAME_KEY)||'';}catch(e){}
 /* Ranking online fora do claude.ai: cole aqui a URL /exec do Google Apps Script. Vazio = usa o banco do artefato ou só o aparelho. */
 const RANK_URL='https://script.google.com/macros/s/AKfycbwXY6gvJncRIiYlsgszN8psqeo8umm5JoTmxw02-0ntXYEYvadANJ5KDtruppyebdwn/exec';
 const LB={db:null,uid:null,can:null,rows:null,state:'local',mine:0,web:false};
@@ -1137,14 +1137,13 @@ function webCall(q){
 }
 let lastRefresh=0;
 function refreshBoard(){
-  if(!LB.web)return;const n=Date.now();if(n-lastRefresh<8000)return;lastRefresh=n;
+  if(!LB.web)return;const n=Date.now();if(n-lastRefresh<15000&&LB.rows)return;lastRefresh=n;
   webCall('a=top').catch(()=>{});
 }
 function initWeb(){
   LB.web=true;LB.uid=uidWeb();LB.can=true;LB.state='loading';
-  refreshBoard();
-  setInterval(()=>{if(!document.hidden)refreshBoard();},60000);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshBoard();});
+  /* leve: sem atualização periódica; busca uma vez, depois que o jogo já está rodando, e de novo só ao abrir o ranking */
+  setTimeout(refreshBoard,4000);
 }
 async function initBoard(){
   try{
@@ -1156,7 +1155,7 @@ async function initBoard(){
     try{LB.can=await user.can('data.write');}catch(e){}
     LB.state='loading';
     const timer=setTimeout(()=>{if(LB.state==='loading')LB.state='slow';},10000);
-    db.collection('ranking').orderBy('s','desc').limit(10).onSnapshot(snap=>{
+    db.collection('ranking').orderBy('s','desc').limit(500).onSnapshot(snap=>{
       clearTimeout(timer);
       const rows=[];
       snap.docs.forEach(d=>{const v=d.data();if(v&&typeof v.n==='string'&&typeof v.s==='number'&&isFinite(v.s))rows.push({id:d.id,n:cleanName(v.n)||'ANÔNIMO',s:Math.max(0,Math.floor(v.s))});});
@@ -1170,7 +1169,7 @@ async function submitScore(raw,score){
   try{localStorage.setItem(NAME_KEY,name);}catch(e){}
   const ex=localBoard.find(e=>e.n===name);
   if(ex){if(score>ex.s)ex.s=score;}else localBoard.push({n:name,s:score});
-  localBoard.sort((a,b)=>b.s-a.s);localBoard=localBoard.slice(0,10);
+  localBoard.sort((a,b)=>b.s-a.s);localBoard=localBoard.slice(0,300);
   try{localStorage.setItem(LB_KEY,JSON.stringify(localBoard));}catch(e){}
   if(LB.web){try{lastRefresh=Date.now();await webCall('a=save&n='+encodeURIComponent(name)+'&s='+Math.floor(score));}catch(e){}}
   if(LB.db&&LB.uid&&LB.can!==false){
@@ -1193,7 +1192,7 @@ let saving=false;
 okEl.addEventListener('click',async()=>{
   if(saving)return;saving=true;okEl.disabled=true;
   try{await submitScore(nmEl.value,G.score);}catch(e){}
-  saving=false;okEl.disabled=false;hideAsk();G.rank=true;G.rankT=0;sfx.lm();
+  saving=false;okEl.disabled=false;hideAsk();G.rank=true;G.rankT=0;G.rkScroll=0;sfx.lm();
 });
 skEl.addEventListener('click',hideAsk);
 nmEl.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();okEl.click();}});
@@ -1208,29 +1207,40 @@ function drawRankBtn(cx,y,w,h,alpha){
 function drawRank(){
   const T=G.rankT,k=easeOutBack(T/0.3);
   ctx.save();ctx.globalAlpha=Math.min(1,T*6);ctx.fillStyle='rgba(8,16,50,.72)';ctx.fillRect(0,0,W,HL);
-  const live=LB.state==='live'&&LB.rows, rows=live?LB.rows:(LB.state==='loading'?[]:localBoard), rowH=28;
-  const cw=Math.min(W-28,276),cx=W/2,ch=Math.max(300,170+Math.min(10,rows.length)*rowH+40),ct=Math.max(safeT+10,HL*0.5-ch/2-6);
+  const live=LB.state==='live'&&LB.rows, rows=live?LB.rows:(LB.state==='loading'?[]:localBoard), rowH=28, n=rows.length;
+  const maxCh=HL-safeT-76, nVis=Math.min(n,Math.max(3,Math.floor((maxCh-154)/rowH)));
+  const cw=Math.min(W-28,276),cx=W/2,ch=Math.max(250,90+nVis*rowH+64),ct=Math.max(safeT+54,HL*0.5-ch/2-6);
+  G.rkMax=Math.max(0,(n-nVis)*rowH);G.rkScroll=Math.max(0,Math.min(G.rkMax,G.rkScroll||0));
   ctx.translate(cx,ct+ch/2);ctx.scale(0.85+0.15*k,0.85+0.15*k);ctx.translate(-cx,-(ct+ch/2));
   rr(cx-cw/2+5,ct+7,cw,ch,18);ctx.fillStyle='rgba(8,16,50,.55)';ctx.fill();
   rr(cx-cw/2,ct,cw,ch,18);ctx.fillStyle='#1A3B94';ctx.fill();ctx.lineWidth=4;ctx.strokeStyle='#0E1B4A';ctx.stroke();
   rr(cx-cw/2+8,ct+8,cw-16,ch-16,12);ctx.lineWidth=1.5;ctx.strokeStyle='rgba(243,217,177,.45)';ctx.stroke();
   txt('RANKING',cx,ct+54,fit('RANKING',cw-40,46),GOLD,NAVY,7);
-  txt(live?'TODOS OS JOGADORES':LB.state==='loading'?'CARREGANDO...':'NESTE APARELHO',cx,ct+76,13,CREAM,null,0);
+  const sub=live?'TODOS OS JOGADORES'+(n?' ('+n+')':''):LB.state==='loading'?'CARREGANDO...':'NESTE APARELHO';
+  txt(sub,cx,ct+76,13,CREAM,null,0);
   const y0=ct+90;
-  if(!rows.length){
-    txt(LB.state==='loading'?'AGUARDE':'NINGUÉM NO RANKING',cx,y0+100,fit('NINGUÉM NO RANKING',cw-40,24),CREAM,null,0);
-    if(LB.state!=='loading')txt('SEJA O PRIMEIRO!',cx,y0+130,22,GOLD,null,0);
+  if(!n){
+    txt(LB.state==='loading'?'AGUARDE':'NINGUÉM NO RANKING',cx,y0+70,fit('NINGUÉM NO RANKING',cw-40,24),CREAM,null,0);
+    if(LB.state!=='loading')txt('SEJA O PRIMEIRO!',cx,y0+100,22,GOLD,null,0);
   }
-  rows.slice(0,10).forEach((r,i)=>{
-    const y=y0+i*rowH, mine=live?(r.id===LB.uid):(lastName!==''&&r.n===lastName);
+  ctx.save();ctx.beginPath();ctx.rect(cx-cw/2+10,y0,cw-20,nVis*rowH);ctx.clip();
+  const i0=Math.max(0,Math.floor(G.rkScroll/rowH)), i1=Math.min(n,i0+nVis+2);
+  for(let i=i0;i<i1;i++){
+    const r=rows[i], y=y0+i*rowH-G.rkScroll, mine=live?(r.id===LB.uid):(lastName!==''&&r.n===lastName);
     if(mine){rr(cx-cw/2+12,y,cw-24,rowH-3,8);ctx.fillStyle='rgba(242,169,59,.28)';ctx.fill();ctx.lineWidth=1.5;ctx.strokeStyle=GOLD;ctx.stroke();}
     const medal=['#F2A93B','#D8DCE6','#C8803A'][i];
     ctx.beginPath();ctx.arc(cx-cw/2+32,y+rowH/2-1.5,11,0,TAU);ctx.fillStyle=medal||'#0E1B4A';ctx.fill();ctx.lineWidth=2;ctx.strokeStyle='#0E1B4A';ctx.stroke();
-    txt(String(i+1),cx-cw/2+32,y+rowH/2+4,14,medal?NAVY:CREAM,null,0);
+    txt(String(i+1),cx-cw/2+32,y+rowH/2+4,fit(String(i+1),18,14),medal?NAVY:CREAM,null,0);
     txt(r.n,cx-cw/2+52,y+rowH/2+6,fit(r.n,cw-130,20),CREAM,null,0,'left');
     txt(String(r.s),cx+cw/2-22,y+rowH/2+6,22,GOLD,null,0,'right');
-  });
-  if(LB.db&&LB.can===false)txt('MODO LEITURA: SÓ COLABORADORES REGISTRAM',cx,ct+ch-44,fit('MODO LEITURA: SÓ COLABORADORES REGISTRAM',cw-30,11),CREAM,null,0);
+  }
+  ctx.restore();
+  if(G.rkMax>0){
+    const th=Math.max(24,nVis*rowH*nVis/n), ty=y0+(nVis*rowH-th)*(G.rkScroll/G.rkMax);
+    rr(cx+cw/2-14,ty,4,th,2);ctx.fillStyle='rgba(243,217,177,.6)';ctx.fill();
+    txt('ARRASTE PARA VER MAIS',cx,ct+ch-44,fit('ARRASTE PARA VER MAIS',cw-40,11),GOLD,null,0);
+  }
+  if(LB.db&&LB.can===false)txt('MODO LEITURA: SÓ COLABORADORES REGISTRAM',cx,ct+ch-58,fit('MODO LEITURA: SÓ COLABORADORES REGISTRAM',cw-30,11),CREAM,null,0);
   ctx.globalAlpha*=0.65+0.35*Math.sin(G.t*4);
   txt('TOQUE PARA VOLTAR',cx,ct+ch-22,fit('TOQUE PARA VOLTAR',cw-40,17),CREAM,null,0);
   ctx.restore();
@@ -1270,10 +1280,10 @@ function onDown(e){
   const r=cv.getBoundingClientRect(),x=(e.clientX-r.left)/scale,y=(e.clientY-r.top)/scale;
   if(G.askName)return;
   if(inRect(x,y,sndRect(),8)){sndOn=!sndOn;saveSnd();if(sndOn){sfx.ui();if(G.state==='play'&&!G.paused)startMusic();}else stopMusic();return;}
-  if(G.rank){if(G.rankT>0.2){G.rank=false;sfx.ui();}return;}
+  if(G.rank){if(G.rankT>0.2)G.rdrag={y:y,s:G.rkScroll||0,moved:false};return;}
   if(G.paused){G.paused=false;last=0;if(G.state==='play')startMusic();return;}
   if(G.state==='ready'){const ch=pilotChips().find(r=>inRect(x,y,r,3));if(ch){pilotIdx=ch.i;savePilot();sfx.ui();return;}}
-  if(G.rkBtn&&inRect(x,y,G.rkBtn,6)&&(G.state==='ready'||(G.state==='over'&&G.overT>0.5))){G.rank=true;G.rankT=0;sfx.ui();refreshBoard();return;}
+  if(G.rkBtn&&inRect(x,y,G.rkBtn,6)&&(G.state==='ready'||(G.state==='over'&&G.overT>0.5))){G.rank=true;G.rankT=0;G.rkScroll=0;sfx.ui();refreshBoard();return;}
   switch(G.state){
     case 'ready':startGame();break;
     case 'play':flap();break;
@@ -1281,7 +1291,16 @@ function onDown(e){
   }
 }
 window.addEventListener('pointerdown',onDown,{passive:false});
-window.addEventListener('pointerup',initAudio,{passive:true});
+window.addEventListener('pointermove',e=>{
+  const d=G.rdrag;if(!d)return;
+  const y=(e.clientY-cv.getBoundingClientRect().top)/scale;
+  if(Math.abs(y-d.y)>6)d.moved=true;
+  if(d.moved)G.rkScroll=Math.max(0,Math.min(G.rkMax||0,d.s-(y-d.y)));
+},{passive:true});
+window.addEventListener('wheel',e=>{if(G.rank){G.rkScroll=Math.max(0,Math.min(G.rkMax||0,(G.rkScroll||0)+e.deltaY*0.5));}},{passive:true});
+function endDrag(){const d=G.rdrag;G.rdrag=null;if(d&&!d.moved&&G.rank){G.rank=false;sfx.ui();}}
+window.addEventListener('pointerup',()=>{initAudio();endDrag();},{passive:true});
+window.addEventListener('pointercancel',()=>{G.rdrag=null;},{passive:true});
 window.addEventListener('touchend',initAudio,{passive:true});
 const inUI=e=>e.target&&e.target.closest&&e.target.closest('#ui');
 document.addEventListener('touchmove',e=>{if(!inUI(e)&&e.cancelable)e.preventDefault();},{passive:false});
